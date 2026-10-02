@@ -1,56 +1,77 @@
-from fastapi import FastAPI
-from models import Product
+from fastapi import FastAPI, Depends, HTTPException
+from sqlalchemy.orm import Session
+from models import Product as PydanticProduct
+from database import SessionLocal, engine
+import database_models
 
-app=FastAPI()
+database_models.Base.metadata.create_all(bind=engine)
+
+app = FastAPI()
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 @app.get('/')
 def greet():
     return "Welcome to FASTAPI"
 
-# products_list1=[
-#     Product(1, "Apple iPhone", "Iphone 18 pro max", 2599, 5),
-#     Product(2, "Apple Macbook", "Macbook Pro m6", 1599, 9),
-#     Product(3, "Offer Letter", "FAANG", 100000, 1),
-#     Product(4, "Home", "Gated", 50000, 10)
-#     ]
-
-products_list1 = [
-    Product(id=1, name="Apple iPhone", description="Iphone 16 pro max", price=2599.0, quantity=5),
-    Product(id=2, name="Apple Macbook", description="Macbook Pro m6", price=1599.0, quantity=9)
-]
-
 @app.get('/products')
-def products():
-    return products_list1
-
-@app.get('/product/{id}')
-def product_by_id(id: int):
-    # return products_list1[id-1]
-    for product in products_list1:
-        if product.id==id: return product
-    return "product not found"
+def get_all_products(db: Session = Depends(get_db)):
+    # .query().all() is the SQLAlchemy version of "SELECT * FROM product;"
+    products = db.query(database_models.Product).all()
+    return products
 
 @app.post('/product')
-def add_product(product: Product):
-    products_list1.append(product)
-    return product
+def add_product(product: PydanticProduct, db: Session = Depends(get_db)):
+    new_db_product = database_models.Product(
+        id=product.id,
+        name=product.name,
+        description=product.description,
+        price=product.price,
+        quantity=product.quantity
+    )
+    db.add(new_db_product)
+    db.commit()
+    db.refresh(new_db_product)
+    return new_db_product
+
 
 @app.put('/product/{id}')
-def update_product(id: int, product: Product):
-    for i in range(len(products_list1)):
-        if products_list1[i].id==id:
-            products_list1[i] = product
-            return {
-                "status": "Updated",
-                "message": products_list1[i]
-            }
-    return "Product not found"
+def update_product(id: int, product: PydanticProduct, db: Session = Depends(get_db)):
+    db_product = db.query(database_models.Product).filter(database_models.Product.id == id).first()
+    
+    if not db_product:
+        raise HTTPException(status_code=404, detail="Product not found")
+        
+    db_product.name = product.name
+    db_product.description = product.description
+    db_product.price = product.price
+    db_product.quantity = product.quantity
+    
+    db.commit()
+    db.refresh(db_product)
+    
+    return {
+        "status": "Updated",
+        "message": db_product
+    }
+
 
 @app.delete('/product/{id}')
-def delete_product(id: int):
-    for index, product in enumerate(products_list1):
-        if product.id == id:
-            deleted_product = products_list1.pop(index)
-            return {"message": "Product deleted successfully", "deleted_product": deleted_product}
-
-    return "Product not found"
+def delete_product(id: int, db: Session = Depends(get_db)):
+    db_product = db.query(database_models.Product).filter(database_models.Product.id == id).first()
+    
+    if not db_product:
+        raise HTTPException(status_code=404, detail="Product not found")
+        
+    db.delete(db_product)
+    db.commit()
+    
+    return {
+        "message": "Product deleted successfully", 
+        "deleted_product": {"id": id, "name": db_product.name}
+    }
